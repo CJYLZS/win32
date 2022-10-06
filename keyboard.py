@@ -1,9 +1,12 @@
 import win32gui
 import win32con
-from cjutils.utils import *
 from ctypes import *
 from ctypes import wintypes
 from ctypes import windll
+
+from cjutils.utils import *
+from event import Event
+from loop import EventLoop
 
 user32 = windll.user32
 kernel32 = windll.kernel32
@@ -46,11 +49,6 @@ class KBDLLHOOKSTRUCT(Structure):
     ]
 
 
-class Event:
-    def __init__(self, event_callback: dict) -> None:
-        self.event_callback = event_callback
-
-
 class AnyKey(Event):
     # use SetWindowsHookEx hook all keys event
     actions = {
@@ -66,6 +64,7 @@ class AnyKey(Event):
         info(f'{self.actions.get(wParam, wParam): <5}key: {keycode.vkCode_Key.get(kbdllhook.vkCode, kbdllhook.vkCode): <5}')
 
     def __handle_hotkey(self):
+        eat = False
         for hotkey in self.__hotkeys:
             values = self.__hotkeys[hotkey]  # shallow copy
             # deep copy
@@ -77,24 +76,41 @@ class AnyKey(Event):
                 if time.time() - lastActivate > timeout:
                     values[2] = True
                     values[3] = time.time()
+                    eat = True
                     onHotKeyDown()
             elif status:
                 values[2] = False
                 onHotKeyUp()
+        return eat
 
     def __callback(self, nCode, wParam, lParam):
+        # ctype callback !!
         # self.__log(wParam, lParam)
         kbdllhook = cast(lParam, POINTER(KBDLLHOOKSTRUCT)).contents
-        if kbdllhook.vkCode == keycode.esc:
+        if kbdllhook.vkCode == keycode.ralt:
             sys.exit(0)
         if wParam in self.downs:
             self.__keys_state_map[kbdllhook.vkCode] = True
         elif wParam in self.ups:
             self.__keys_state_map[kbdllhook.vkCode] = False
-        self.__handle_hotkey()
+
+        eat = self.__handle_hotkey()
+        if eat:
+            user32.CallNextHookEx(0, win32con.HC_SKIP, wParam, lParam)
+            return win32con.HC_SKIP
         return user32.CallNextHookEx(0, nCode, wParam, lParam)
 
     def register_hotkey(self, keys: tuple, onHotKeyDown, onHotKeyUp, timeout=0.5):
+        # onHotKeyDown and onHotKeyUp cannot use python catch exceptions
+        '''
+        File "_ctypes/callbacks.c"
+        result = PyObject_Vectorcall(callable, args, nargs, NULL);
+        if (result == NULL) {
+            _PyErr_WriteUnraisableMsg("on calling ctypes callback function",
+                                    callable);
+        }
+        '''
+        # any exception cannot be catched in callback !!!
         vkCodes = tuple([keycode[key] for key in keys])
         # down up activating last_activate timeout
         self.__hotkeys[vkCodes] = [onHotKeyDown, onHotKeyUp, False, 0, timeout]
@@ -156,28 +172,6 @@ class HotKey(Event):
 
     def __del__(self):
         windll.user32.UnregisterHotKey(None, 1)
-
-
-class EventLoop:
-    def __init__(self, objs=[]) -> None:
-        self.running_state = ''
-        self.event_callback = {}
-        for obj in objs:
-            assert isinstance(obj, Event), "obj must is instance of Event"
-            for event, callback in obj.event_callback.items():
-                self.event_callback[event] = callback
-
-    def stop(self):
-        self.running_state = ''
-
-    def start(self):
-        self.running_state = 'running'
-        msg = wintypes.MSG()
-        while user32.GetMessageW(byref(msg), 0, 0, 0) != 0 and self.running_state == 'running':
-            if msg.message in self.event_callback.keys():
-                self.event_callback[msg.message](msg)
-            user32.TranslateMessage(msg)
-            user32.DispatchMessageW(msg)
 
 
 if __name__ == '__main__':

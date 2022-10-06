@@ -13,9 +13,9 @@ class KeyCode(dict):
     def __set_vcode(self, vkCode, keyName):
         self.vkCode_Key[vkCode] = keyName
         self.__dict__[keyName] = vkCode
+        self[keyName] = vkCode
 
     def __init__(self) -> None:
-        self['a'] = 1
         self.vkCode_Key = {}
         for i in range(26):
             self.__set_vcode(
@@ -52,24 +52,59 @@ class Event:
 
 
 class AnyKey(Event):
+    # use SetWindowsHookEx hook all keys event
     actions = {
-        256:'down',
-        260:'down',
-        257:'up'
+        256: 'down',
+        260: 'down',
+        257: 'up'
     }
+    downs = (256, 260)
+    ups = (257, 261)
+
     def __log(self, wParam, lParam):
         kbdllhook = cast(lParam, POINTER(KBDLLHOOKSTRUCT)).contents
         info(f'{self.actions.get(wParam, wParam): <5}key: {keycode.vkCode_Key.get(kbdllhook.vkCode, kbdllhook.vkCode): <5}')
 
+    def __handle_hotkey(self):
+        for hotkey in self.__hotkeys:
+            values = self.__hotkeys[hotkey]  # shallow copy
+            # deep copy
+            onHotKeyDown, onHotKeyUp, status, lastActivate, timeout = self.__hotkeys[hotkey]
+            activate = True
+            for vkCode in hotkey:
+                activate = activate and self.__keys_state_map[vkCode]
+            if activate:
+                if time.time() - lastActivate > timeout:
+                    values[2] = True
+                    values[3] = time.time()
+                    onHotKeyDown()
+            elif status:
+                values[2] = False
+                onHotKeyUp()
+
     def __callback(self, nCode, wParam, lParam):
-        self.__log(wParam, lParam)
+        # self.__log(wParam, lParam)
         kbdllhook = cast(lParam, POINTER(KBDLLHOOKSTRUCT)).contents
         if kbdllhook.vkCode == keycode.esc:
             sys.exit(0)
+        if wParam in self.downs:
+            self.__keys_state_map[kbdllhook.vkCode] = True
+        elif wParam in self.ups:
+            self.__keys_state_map[kbdllhook.vkCode] = False
+        self.__handle_hotkey()
         return user32.CallNextHookEx(0, nCode, wParam, lParam)
+
+    def register_hotkey(self, keys: tuple, onHotKeyDown, onHotKeyUp, timeout=0.5):
+        vkCodes = tuple([keycode[key] for key in keys])
+        # down up activating last_activate timeout
+        self.__hotkeys[vkCodes] = [onHotKeyDown, onHotKeyUp, False, 0, timeout]
 
     def __init__(self) -> None:
         super().__init__(event_callback={})
+        self.__hotkeys = {}
+        self.__keys_state_map = {}
+        for _, vkCode in keycode.items():
+            self.__keys_state_map[vkCode] = False
         user32.SetWindowsHookExW.restype = wintypes.LONG
         user32.SetWindowsHookExW.argtypes = [
             c_int, wintypes.HANDLE, wintypes.HINSTANCE, wintypes.DWORD]
@@ -92,6 +127,7 @@ class AnyKey(Event):
 
 
 class HotKey(Event):
+    # RegisterHotKey can't use key up callback
     def __RegisterHotKey(self, args: tuple, callback):
         '''
             BOOL WINAPI RegisterHotKey(
@@ -104,14 +140,14 @@ class HotKey(Event):
         win32gui.RegisterHotKey(args[0], args[1], args[2], args[3])
         self.registered_keys[(args[2], args[3])] = callback
 
-    def callback(self, msg: wintypes.MSG):
+    def __callback(self, msg: wintypes.MSG):
         mod = msg.lParam & 0b1111111111111111
         key = msg.lParam >> 16
         self.registered_keys[(mod, key)]()
 
     def __init__(self, hot_keys=()):
         super().__init__(event_callback={
-            win32con.WM_HOTKEY: self.callback
+            win32con.WM_HOTKEY: self.__callback
         })
         self.keycode = KeyCode()
         self.registered_keys = {}
@@ -145,15 +181,18 @@ class EventLoop:
 
 
 if __name__ == '__main__':
-    info(cyan('global logging key press esc exit'))
-    def hello():
-        info('hello')
-    keycode = KeyCode()
-    hotkey = HotKey(
-        hot_keys=(
-            (0, 0, win32con.MOD_ALT, keycode.h, hello),
-        )
-    )
+    def activate():
+        info('activate')
+
+    def deactivate():
+        info('deactivate')
+    # keycode = KeyCode()
+    # hotkey = HotKey(
+    #     hot_keys=(
+    #         (0, 0, win32con.MOD_ALT, keycode.h, activate),
+    #     )
+    # )
     a = AnyKey()
-    eventloop = EventLoop(objs=[hotkey])
+    a.register_hotkey(('lalt', 'h'), activate, deactivate, timeout=0)
+    eventloop = EventLoop(objs=[])
     eventloop.start()

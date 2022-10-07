@@ -8,25 +8,40 @@ import win32con
 user32 = windll.user32
 ole32 = windll.ole32
 kernel32 = windll.kernel32
+dwmapi = windll.dwmapi
 
 
-class window_info:
-    def __init__(self, hwnd=None, file_name='', rectangle=(0, 0, 0, 0), title='', process_id=-1) -> None:
+class WINDOWPLACEMENT(Structure):
+    # https://learn.microsoft.com/zh-cn/windows/win32/api/winuser/ns-winuser-windowplacement
+    _fields_ = [
+        ("length", wintypes.UINT),
+        ("flags", wintypes.UINT),
+        ("showCmd", wintypes.UINT),
+        ("ptMinPosition", wintypes.POINT),
+        ("ptMaxPosition", wintypes.POINT),
+        ("rcNormalPosition", wintypes.RECT),
+        ("rcDevice", wintypes.RECT),
+    ]
+
+
+class WindowInfo:
+    def __init__(self, hwnd=None, file_name='', showCmd=0, rectangle=(0, 0, 0, 0), title='', process_id=-1) -> None:
         self.hwnd = hwnd
         self.file_name = file_name
+        self.showCmd = showCmd
         self.rectangle = rectangle
         self.title = title
         self.process_id = process_id
 
     def __repr__(self):
-        return f'{self.process_id: <10}{self.hwnd: <10}{str(self.rectangle): <30}{self.title[:30]: <50}{self.file_name}'
+        return f'{self.process_id: <10}{self.hwnd: <10}{self.showCmd: <5}{str(self.rectangle): <30}{self.title[:30]: <50}{self.file_name}'
 
 
 class WindowsHook:
     def __callback(self, hWinEventHook, event, hwnd, idObject, idChild, dwEventThread,
                    dwmsEventTime):
         if event in self.listenEvents_dict:
-            self.listenEvents_dict[event](hwnd)
+            self.listenEvents_dict[event](hwnd, event)
 
     def __setHook(self, WinEventProc, eventType):
         return user32.SetWinEventHook(
@@ -40,7 +55,7 @@ class WindowsHook:
         )
 
     def __init__(self, listenEvents=[]) -> None:
-
+        # https://gist.github.com/keturn/6695625
         self.WinEventProcType = WINFUNCTYPE(
             None,
             wintypes.HANDLE,
@@ -58,13 +73,14 @@ class WindowsHook:
         self.eventTypes = {
             win32con.EVENT_SYSTEM_FOREGROUND: "Foreground",
             win32con.EVENT_SYSTEM_MOVESIZEEND: "Move",
+            win32con.EVENT_OBJECT_LOCATIONCHANGE: "LocationChange",
             win32con.WM_HOTKEY: "Hotkey",
             win32con.EVENT_OBJECT_FOCUS: "Focus",
             win32con.EVENT_OBJECT_SHOW: "Show",
             win32con.EVENT_SYSTEM_DIALOGSTART: "Dialog",
             win32con.EVENT_SYSTEM_CAPTURESTART: "Capture",
-            win32con.EVENT_SYSTEM_MINIMIZEEND: "UnMinimize",
-            win32con.EVENT_SYSTEM_MINIMIZESTART: "Minimize"
+            win32con.EVENT_SYSTEM_MINIMIZEEND: "MinimizeEnd",
+            win32con.EVENT_SYSTEM_MINIMIZESTART: "MinimizeStart"
         }
         # limited information would be sufficient, but our platform doesn't have it.
         self.processFlag = getattr(win32con, 'PROCESS_QUERY_LIMITED_INFORMATION',
@@ -97,6 +113,18 @@ class WindowsHook:
         finally:
             kernel32.CloseHandle(hProcess)
 
+    def get_window_rect(self, hwnd):
+        # https://blog.csdn.net/See_Star/article/details/103940462
+        rect = wintypes.RECT()
+        DWMWA_EXTENDED_FRAME_BOUNDS = 9
+        dwmapi.DwmGetWindowAttribute(
+            wintypes.HWND(hwnd),
+            wintypes.DWORD(DWMWA_EXTENDED_FRAME_BOUNDS),
+            byref(rect),
+            sizeof(rect)
+        )
+        return rect.left, rect.top, rect.right, rect.bottom
+
     def get_window_info(self, hwnd):
         processID = wintypes.DWORD()
         user32.GetWindowThreadProcessId(
@@ -110,8 +138,13 @@ class WindowsHook:
         title = create_unicode_buffer(length + 1)
         user32.GetWindowTextW(hwnd, title, length + 1)
         title_value = title.value
-        rect = win32gui.GetWindowRect(hwnd)
-        return window_info(hwnd, file_name, rect, title_value, process_id)
+        # rect = win32gui.GetWindowRect(hwnd)
+        # https://stackoverflow.com/questions/3192232/getwindowrect-too-small-on-windows-7
+        rect = self.get_window_rect(hwnd)
+
+        data = WINDOWPLACEMENT()
+        user32.GetWindowPlacement(hwnd, byref(data))
+        return WindowInfo(hwnd, file_name, data.showCmd, rect, title_value, process_id)
 
 
 if __name__ == '__main__':

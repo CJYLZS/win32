@@ -27,6 +27,7 @@ class KeyCode(dict):
         self.__set_vcode(13, 'enter')
         self.__set_vcode(27, 'esc')
         self.__set_vcode(32, 'space')
+        self.__set_vcode(44, 'prtsc')
         self.__set_vcode(160, 'lshift')
         self.__set_vcode(161, 'rshift')
         self.__set_vcode(162, 'lctrl')
@@ -64,7 +65,8 @@ class AnyKey(Event):
         info(f'{self.actions.get(wParam, wParam): <5}key: {keycode.vkCode_Key.get(kbdllhook.vkCode, kbdllhook.vkCode): <5}')
 
     def __handle_hotkey(self):
-        eat = False
+        skip = False
+        ret = None
         for hotkey in self.__hotkeys:
             values = self.__hotkeys[hotkey]  # shallow copy
             # deep copy
@@ -76,26 +78,28 @@ class AnyKey(Event):
                 if time.time() - lastActivate > timeout:
                     values[2] = True
                     values[3] = time.time()
-                    eat = True
-                    onHotKeyDown()
+                    skip = True
+                    ret = onHotKeyDown()
             elif status:
                 values[2] = False
-                onHotKeyUp()
-        return eat
+                ret = onHotKeyUp()
+        if isinstance(ret, int):
+            return ret == win32con.HC_SKIP
+        return skip
 
     def __callback(self, nCode, wParam, lParam):
         # ctype callback !!
         # self.__log(wParam, lParam)
         kbdllhook = cast(lParam, POINTER(KBDLLHOOKSTRUCT)).contents
-        if kbdllhook.vkCode == keycode.ralt:
+        if kbdllhook.vkCode == keycode.prtsc:
             sys.exit(0)
         if wParam in self.downs:
             self.__keys_state_map[kbdllhook.vkCode] = True
         elif wParam in self.ups:
             self.__keys_state_map[kbdllhook.vkCode] = False
 
-        eat = self.__handle_hotkey()
-        if eat:
+        skip = self.__handle_hotkey()
+        if skip:
             user32.CallNextHookEx(0, win32con.HC_SKIP, wParam, lParam)
             return win32con.HC_SKIP
         return user32.CallNextHookEx(0, nCode, wParam, lParam)
@@ -114,6 +118,10 @@ class AnyKey(Event):
         vkCodes = tuple([keycode[key] for key in keys])
         # down up activating last_activate timeout
         self.__hotkeys[vkCodes] = [onHotKeyDown, onHotKeyUp, False, 0, timeout]
+    
+    def register_hotkeys(self, *args):
+        for arg in args:
+            self.register_hotkey(*arg)
 
     def __init__(self) -> None:
         super().__init__(event_callback={})

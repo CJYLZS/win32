@@ -15,5 +15,5 @@ class Event:
         res = user32.PostThreadMessageW(tid, msg, wparam, lparam)
         assert res
 
-    def __init__(self, event_callback: dict) -> None:
+    def __init__(self, event_callback: dict = {}) -> None:
         self.event_callback = event_callback

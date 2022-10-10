@@ -31,9 +31,11 @@ class KeyCode(dict):
         self.__set_vcode(160, 'lshift')
         self.__set_vcode(161, 'rshift')
         self.__set_vcode(162, 'lctrl')
-        self.__set_vcode(163, 'lctrl')
+        self.__set_vcode(163, 'rctrl')
         self.__set_vcode(164, 'lalt')
         self.__set_vcode(165, 'ralt')
+        self.__set_vcode(188, ',')
+        self.__set_vcode(190, '.')
 
 
 keycode = KeyCode()
@@ -92,7 +94,8 @@ class AnyKey(Event):
         # self.__log(wParam, lParam)
         kbdllhook = cast(lParam, POINTER(KBDLLHOOKSTRUCT)).contents
         if kbdllhook.vkCode == keycode.prtsc:
-            sys.exit(0)
+            self.stop_loop()
+            return win32con.HC_SKIP
         if wParam in self.downs:
             self.__keys_state_map[kbdllhook.vkCode] = True
         elif wParam in self.ups:
@@ -118,7 +121,7 @@ class AnyKey(Event):
         vkCodes = tuple([keycode[key] for key in keys])
         # down up activating last_activate timeout
         self.__hotkeys[vkCodes] = [onHotKeyDown, onHotKeyUp, False, 0, timeout]
-    
+
     def register_hotkeys(self, *args):
         for arg in args:
             self.register_hotkey(*arg)
@@ -185,9 +188,11 @@ class HotKey(Event):
 if __name__ == '__main__':
     def activate():
         info('activate')
+        return win32con.HC_SKIP
 
     def deactivate():
         info('deactivate')
+        return 0
     # keycode = KeyCode()
     # hotkey = HotKey(
     #     hot_keys=(
@@ -195,6 +200,6 @@ if __name__ == '__main__':
     #     )
     # )
     a = AnyKey()
-    a.register_hotkey(('lalt', 'h'), activate, deactivate, timeout=0)
+    a.register_hotkey(('lctrl', ','), activate, deactivate, timeout=0)
     eventloop = EventLoop(objs=[])
     eventloop.start()
